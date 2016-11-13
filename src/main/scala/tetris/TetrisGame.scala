@@ -25,9 +25,7 @@ object TetrisGame {
     val gridWidth = floor(canvasWidth / gridEdgeSize).toInt
     val gridHeight = floor(canvasHeight / gridEdgeSize).toInt
 
-    var staticBlocks = Set[StaticBlock]()
-    var mobileShapeOpt: Option[MobileShape] = None
-
+    case class GameContext(staticBlocks: Set[StaticBlock], mobileShape: Option[MobileShape])
     case class CanvasPosition(x: Double, y: Double)
 
     case class BlockPosition(x: Int, y: Int) {
@@ -113,7 +111,7 @@ object TetrisGame {
       )
     )
 
-    def allValidMobileShapes: Set[MobileShapeDefinition] = {
+    def allValidMobileShapes(implicit gameContext: GameContext): Set[MobileShapeDefinition] = {
 
       val rotationMatrices = Set(
         List(List(0, -1), List(1, 0)),
@@ -165,8 +163,10 @@ object TetrisGame {
       shapeTemplates
         .flatMap(shapeRotationPermutations)
         .flatMap(shapePositionPermutations)
-        .filterNot(_.blocks.exists(_.isOverlapping(staticBlocks.map(_.position))))
+        .filterNot(_.blocks.exists(_.isOverlapping(gameContext.staticBlocks.map(_.position))))
     }
+
+    implicit var gameContext = GameContext(Set[StaticBlock](), None)
 
     def randomShapeDefinition: Option[MobileShapeDefinition] = {
       val permutations = allValidMobileShapes
@@ -175,6 +175,13 @@ object TetrisGame {
       else
         Some(permutations.toList(nextInt(permutations.size)))
     }
+
+    gameContext = GameContext(
+      gameContext.staticBlocks,
+      randomShapeDefinition.flatMap(shape =>
+        Some(MobileShape(shape, BlockPosition(0,0), IdentityRotationPosition))
+      )
+    )
 
     def clear() = {
       ctx.fillStyle = "black"
@@ -190,65 +197,59 @@ object TetrisGame {
       ctx.strokeRect(position.x, position.y, gridEdgeSize, gridEdgeSize)
     }
 
-    def draw(): Unit = {
+    def draw()(implicit gameContext: GameContext): Unit = {
       clear()
-      drawBlocks()
-    }
 
-    def drawBlocks(): Unit = {
-      mobileShapeOpt match {
+      gameContext.mobileShape match {
         case Some(mobileShape) =>
-          (mobileShape.staticBlocks ++ staticBlocks).foreach { staticBlock =>
+          (mobileShape.staticBlocks ++ gameContext.staticBlocks).foreach { staticBlock =>
             drawBlock(blockPosition = staticBlock.position, blockColor = staticBlock.color)
           }
         case None =>
-          staticBlocks.foreach {  staticBlock =>
+          gameContext.staticBlocks.foreach {  staticBlock =>
             drawBlock(blockPosition = staticBlock.position, blockColor = staticBlock.color)
           }
       }
     }
 
-    def update() = {
-      mobileShapeOpt match {
+    def update()(implicit gameContext: GameContext): GameContext = {
+      gameContext.mobileShape match {
         case Some(mobileShape) => {
           val newMobileShape = mobileShape.dropped
 
           val invalidNewMobileBlockPosition =
             newMobileShape.blocks.exists { position =>
-              position.isOutOfBounds || position.isOverlapping(staticBlocks.map(_.position))
+              position.isOutOfBounds || position.isOverlapping(gameContext.staticBlocks.map(_.position))
             }
 
           if(invalidNewMobileBlockPosition) {
-            staticBlocks = staticBlocks ++ mobileShape.staticBlocks
-            mobileShapeOpt = randomShapeDefinition.flatMap(shape =>
-              Some(MobileShape(shape, BlockPosition(0,0), IdentityRotationPosition))
+            GameContext(
+              gameContext.staticBlocks ++ mobileShape.staticBlocks,
+              randomShapeDefinition.flatMap(shape =>
+                Some(MobileShape(shape, BlockPosition(0,0), IdentityRotationPosition))
+              )
             )
           } else {
-            mobileShapeOpt = Some(newMobileShape)
+            GameContext(
+              gameContext.staticBlocks,
+              Some(newMobileShape)
+            )
           }
         }
-        case None => {
-          println("GAME OVER")
-        }
+        case None => gameContext
       }
     }
 
     def loop() = {
       draw()
-      update()
+      gameContext = update()
     }
 
-    def gameSetup() = {
-      mobileShapeOpt = randomShapeDefinition.flatMap(shape =>
-        Some(MobileShape(shape, BlockPosition(0,0), IdentityRotationPosition))
-      )
-    }
-
-    dom.document.onkeydown = (e: dom.KeyboardEvent) => {
-      mobileShapeOpt match {
+    def executeCommand(keyCode: Int)(implicit gameContext: GameContext): GameContext = {
+      gameContext.mobileShape match {
         case Some(mobileShape) => {
 
-          val newShape = e.keyCode match {
+          val newShape = keyCode match {
             case 37 => //left
               MobileShape(mobileShape.definition, mobileShape.position.left, mobileShape.rotationPosition)
             case 38 => //up
@@ -262,19 +263,23 @@ object TetrisGame {
             case _ => mobileShape
           }
 
-          implicit val gameStaticBlocks = staticBlocks
+          implicit val gameStaticBlocks = gameContext.staticBlocks
 
           if(!newShape.isInvalid) {
-            mobileShapeOpt = Some(newShape)
+            GameContext(gameContext.staticBlocks, Some(newShape))
+          } else {
+            gameContext
           }
 
         }
-        case None => {}
+        case None => gameContext
       }
-      draw()
     }
 
-    gameSetup()
+    dom.document.onkeydown = (e: dom.KeyboardEvent) => {
+      gameContext = executeCommand(e.keyCode)
+      draw()
+    }
     loop()
     dom.setInterval(() => loop(), 500)
   }
