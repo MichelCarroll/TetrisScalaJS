@@ -38,6 +38,16 @@ object TetrisGame {
       def isOutOfBounds = isOutOfBoundsFromLeft || isOutOfBoundsFromTop || x >= gridWidth || y >= gridHeight
       def isOverlapping(blocks: Set[BlockPosition]) = blocks.contains(this)
       def relativeTo(pos: BlockPosition) = BlockPosition(x - pos.x, y - pos.y)
+      def applyRotation(matrix: List[List[Int]], center: BlockPosition): BlockPosition = {
+        val relative = this.relativeTo(center)
+        val newX = relative.x * matrix(0)(0) + relative.y * matrix(0)(1)
+        val newY = relative.x * matrix(1)(0) + relative.y * matrix(1)(1)
+        BlockPosition(
+          newX + center.x,
+          newY + center.y
+        )
+      }
+      def add(pos: BlockPosition): BlockPosition = BlockPosition(x + pos.x, y + pos.y)
     }
     case class BlockColor(name: String)
     case class MobileShapeDefinition(blocks: List[BlockPosition], center: BlockPosition, color: BlockColor)
@@ -62,16 +72,10 @@ object TetrisGame {
     case class MobileShape(definition: MobileShapeDefinition, position: BlockPosition, rotationPosition: RotationPosition) {
 
       def dropped = MobileShape(definition, position.down, rotationPosition)
-      def blocks = definition.blocks.map(block => {
-          val relative = block.relativeTo(definition.center)
-          val newX = relative.x * rotationPosition.matrix(0)(0) + relative.y * rotationPosition.matrix(0)(1)
-          val newY = relative.x * rotationPosition.matrix(1)(0) + relative.y * rotationPosition.matrix(1)(1)
-          BlockPosition(
-            newX + definition.center.x + position.x,
-            newY + definition.center.y + position.y
-          )
-        }
-      )
+      def blocks = definition.blocks
+          .map(_.applyRotation(rotationPosition.matrix, definition.center))
+          .map(_.add(position))
+
       def staticBlocks = blocks.map(StaticBlock(_, definition.color)).toSet
       def isInvalid(implicit staticBlocks: Set[StaticBlock]) =
         blocks.exists(block => block.isOutOfBounds || block.isOverlapping(staticBlocks.map(_.position)))
@@ -114,25 +118,17 @@ object TetrisGame {
     def allValidMobileShapes(implicit gameContext: GameContext): Set[MobileShapeDefinition] = {
 
       val rotationMatrices = Set(
-        List(List(0, -1), List(1, 0)),
-        List(List(0, 1), List(-1, 0)),
-        List(List(1, 0), List(0, 1)),
-        List(List(-1, 0), List(0, -1))
+        BaseRotationPosition,
+        BaseRotationPosition.next,
+        BaseRotationPosition.next.next,
+        BaseRotationPosition.next.next.next
       )
 
       def shapeRotationPermutations(shapeDefinition: MobileShapeDefinition): Set[MobileShapeDefinition] = {
         rotationMatrices
-          .map(rotationMatrix => {
-            shapeDefinition.blocks.map { position =>
-              val relative = position.relativeTo(shapeDefinition.center)
-              val newX = relative.x * rotationMatrix(0)(0) + relative.y * rotationMatrix(0)(1)
-              val newY = relative.x * rotationMatrix(1)(0) + relative.y * rotationMatrix(1)(1)
-              BlockPosition(
-                newX + shapeDefinition.center.x,
-                newY + shapeDefinition.center.y
-              )
-            }
-          })
+          .map(rotationMatrix =>
+            shapeDefinition.blocks.map(_.applyRotation(rotationMatrix.matrix, shapeDefinition.center))
+          )
           .map(rotatedShape => {
             @tailrec
             def correctedShapePositions(shape: List[BlockPosition]): List[BlockPosition] = {
