@@ -25,10 +25,10 @@ object TetrisGame {
     val gridWidth = floor(canvasWidth / gridEdgeSize).toInt
     val gridHeight = floor(canvasHeight / gridEdgeSize).toInt
 
-    case class GameContext(staticBlocks: Set[StaticBlock], mobileShape: Option[MobileShape])
+
     case class CanvasPosition(x: Double, y: Double)
 
-    case class BlockPosition(x: Int, y: Int) {
+    case class BlockPosition(x: Int, y: Int ) {
       def down = BlockPosition(x, y + 1)
       def up = BlockPosition(x, y - 1)
       def right = BlockPosition(x + 1, y)
@@ -49,6 +49,39 @@ object TetrisGame {
       }
       def add(pos: BlockPosition): BlockPosition = BlockPosition(x + pos.x, y + pos.y)
     }
+
+    case class StaticBlock(position: BlockPosition, color: BlockColor)
+    case class StaticBlockArea(blocks: Set[StaticBlock]) {
+      def completeRows: Set[Int] = blocks
+        .groupBy(_.position.y)
+        .filter(_._2.size == gridWidth)
+        .keySet
+
+      def withClearedCompleteRows = {
+        val rows = completeRows
+        StaticBlockArea(
+          blocks
+            .filterNot(block => rows.contains(block.position.y))
+            .map(block => StaticBlock(
+              BlockPosition(
+                block.position.x,
+                block.position.y + rows.count(_ > block.position.y)
+              ),
+              block.color
+            ))
+        )
+      }
+    }
+
+    implicit def areaToStaticBlocks(staticBlockArea: StaticBlockArea): Set[StaticBlock] =
+      staticBlockArea.blocks
+
+    implicit def staticBlocksToPositions(staticBlocks: Set[StaticBlock]): Set[BlockPosition] =
+      staticBlocks.map(_.position)
+
+    implicit def staticBlockAreaToPositions(staticBlockArea: StaticBlockArea): Set[BlockPosition] =
+      staticBlockArea.blocks.map(_.position)
+
     case class BlockColor(name: String)
     case class MobileShapeDefinition(blocks: List[BlockPosition], center: BlockPosition, color: BlockColor)
 
@@ -68,7 +101,6 @@ object TetrisGame {
       ))
     }
 
-    case class StaticBlock(position: BlockPosition, color: BlockColor)
     case class MobileShape(definition: MobileShapeDefinition, position: BlockPosition, rotationPosition: RotationPosition) {
 
       def dropped = MobileShape(definition, position.down, rotationPosition)
@@ -77,10 +109,11 @@ object TetrisGame {
           .map(_.add(position))
 
       def staticBlocks = blocks.map(StaticBlock(_, definition.color)).toSet
-      def isInvalid(implicit staticBlocks: Set[StaticBlock]) =
-        blocks.exists(block => block.isOutOfBounds || block.isOverlapping(staticBlocks.map(_.position)))
+      def isInvalid(implicit gameContext: GameContext) =
+        blocks.exists(block => block.isOutOfBounds || block.isOverlapping(gameContext.staticBlocks))
 
     }
+
 
     val shapeTemplates = Set(
 
@@ -115,7 +148,8 @@ object TetrisGame {
       )
     )
 
-    def allValidMobileShapes(implicit gameContext: GameContext): Set[MobileShapeDefinition] = {
+
+    def allValidMobileShapes(gameContext: GameContext): Set[MobileShapeDefinition] = {
 
       val rotationMatrices = Set(
         BaseRotationPosition,
@@ -159,35 +193,58 @@ object TetrisGame {
       shapeTemplates
         .flatMap(shapeRotationPermutations)
         .flatMap(shapePositionPermutations)
-        .filterNot(_.blocks.exists(_.isOverlapping(gameContext.staticBlocks.map(_.position))))
+        .filterNot(_.blocks.exists(_.isOverlapping(gameContext.staticBlocks)))
     }
 
-    implicit var gameContext = GameContext(Set[StaticBlock](), None)
+    case class GameContext(staticBlocks: StaticBlockArea, mobileShape: Option[MobileShape]) {
 
-    def randomShapeDefinition: Option[MobileShapeDefinition] = {
-      val permutations = allValidMobileShapes
-      if(permutations.isEmpty)
-        None
-      else
-        Some(permutations.toList(nextInt(permutations.size)))
+      def mergeBlocks(newBlocks: Set[StaticBlock]) = GameContext(
+        StaticBlockArea(staticBlocks.blocks ++ newBlocks),
+        mobileShape
+      )
+
+      private def randomShape: Option[MobileShapeDefinition] = {
+        val permutations = allValidMobileShapes(this)
+        if(permutations.isEmpty)
+          None
+        else
+          Some(permutations.toList(nextInt(permutations.size)))
+      }
+
+      def replaceMobileShape(newShape: MobileShape) = GameContext(
+        staticBlocks,
+        Some(newShape)
+      )
+
+      def withRandomShape =
+        GameContext(staticBlocks, this.randomShape.flatMap(shape =>
+          Some(MobileShape(shape, BlockPosition(0,0), IdentityRotationPosition))
+        ))
+
+      def withClearedCompleteRows = GameContext(
+        staticBlocks.withClearedCompleteRows,
+        mobileShape
+      )
+
     }
+
+
+    implicit var gameContext = GameContext(StaticBlockArea(Set[StaticBlock]()), None)
 
     gameContext = GameContext(
       gameContext.staticBlocks,
-      randomShapeDefinition.flatMap(shape =>
-        Some(MobileShape(shape, BlockPosition(0,0), IdentityRotationPosition))
-      )
+      None
     )
+    gameContext = gameContext.withRandomShape
 
     def clear() = {
       ctx.fillStyle = "black"
       ctx.fillRect(0, 0, gridWidth * gridEdgeSize,  gridHeight * gridEdgeSize)
     }
 
-    def drawBlock(blockPosition: BlockPosition, blockColor: BlockColor): Unit = {
-
-      val position = CanvasPosition(blockPosition.x * gridEdgeSize, blockPosition.y * gridEdgeSize)
-      ctx.fillStyle = blockColor.name
+    def drawBlock(block: StaticBlock): Unit = {
+      val position = CanvasPosition(block.position.x * gridEdgeSize, block.position.y * gridEdgeSize)
+      ctx.fillStyle = block.color.name
       ctx.fillRect(position.x, position.y, gridEdgeSize, gridEdgeSize)
       ctx.strokeStyle = "white"
       ctx.strokeRect(position.x, position.y, gridEdgeSize, gridEdgeSize)
@@ -198,13 +255,9 @@ object TetrisGame {
 
       gameContext.mobileShape match {
         case Some(mobileShape) =>
-          (mobileShape.staticBlocks ++ gameContext.staticBlocks).foreach { staticBlock =>
-            drawBlock(blockPosition = staticBlock.position, blockColor = staticBlock.color)
-          }
+          (mobileShape.staticBlocks ++ gameContext.staticBlocks).foreach(drawBlock)
         case None =>
-          gameContext.staticBlocks.foreach {  staticBlock =>
-            drawBlock(blockPosition = staticBlock.position, blockColor = staticBlock.color)
-          }
+          gameContext.staticBlocks.blocks.foreach(drawBlock)
       }
     }
 
@@ -215,21 +268,18 @@ object TetrisGame {
 
           val invalidNewMobileBlockPosition =
             newMobileShape.blocks.exists { position =>
-              position.isOutOfBounds || position.isOverlapping(gameContext.staticBlocks.map(_.position))
+              position.isOutOfBounds || position.isOverlapping(gameContext.staticBlocks)
             }
 
           if(invalidNewMobileBlockPosition) {
-            GameContext(
-              gameContext.staticBlocks ++ mobileShape.staticBlocks,
-              randomShapeDefinition.flatMap(shape =>
-                Some(MobileShape(shape, BlockPosition(0,0), IdentityRotationPosition))
-              )
-            )
+            gameContext
+              .mergeBlocks(mobileShape.staticBlocks)
+              .withRandomShape
+              .withClearedCompleteRows
           } else {
-            GameContext(
-              gameContext.staticBlocks,
-              Some(newMobileShape)
-            )
+            gameContext
+              .replaceMobileShape(newMobileShape)
+
           }
         }
         case None => gameContext
@@ -262,7 +312,7 @@ object TetrisGame {
           implicit val gameStaticBlocks = gameContext.staticBlocks
 
           if(!newShape.isInvalid) {
-            GameContext(gameContext.staticBlocks, Some(newShape))
+            gameContext.replaceMobileShape(newShape)
           } else {
             gameContext
           }
@@ -277,6 +327,6 @@ object TetrisGame {
       draw()
     }
     loop()
-    dom.setInterval(() => loop(), 500)
+    dom.setInterval(() => loop(), 200)
   }
 }
