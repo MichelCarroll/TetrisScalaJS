@@ -8,7 +8,30 @@ import scala.util.Random.nextInt
 import java.lang.Math.floor
 
 import scala.annotation.tailrec
-import scala.collection.immutable.Map
+import scala.language.implicitConversions
+
+
+class DrawingContext(canvasContext: dom.CanvasRenderingContext2D, gridEdgeSize: Double, gridWidth: Double, gridHeight: Double) {
+
+  canvasContext.canvas.width = (gridWidth * gridEdgeSize).toInt
+  canvasContext.canvas.height = (gridHeight * gridEdgeSize).toInt
+
+  case class CanvasColor(name: String)
+  case class CanvasRect(x: Double, y: Double, width: Double, height: Double, fill: CanvasColor, stroke: CanvasColor)
+
+  def clear() = {
+    canvasContext.fillStyle = "black"
+    canvasContext.fillRect(0, 0, gridWidth * gridEdgeSize, gridHeight * gridEdgeSize)
+  }
+
+  def drawBlock(rect: CanvasRect): Unit = {
+    canvasContext.fillStyle = rect.fill.name
+    canvasContext.fillRect(rect.x * gridEdgeSize, rect.y * gridEdgeSize, rect.width * gridEdgeSize, rect.height * gridEdgeSize)
+    canvasContext.strokeStyle = rect.stroke.name
+    canvasContext.strokeRect(rect.x * gridEdgeSize, rect.y * gridEdgeSize, rect.width * gridEdgeSize, rect.height * gridEdgeSize)
+  }
+
+}
 
 @JSExport
 object TetrisGame {
@@ -16,17 +39,14 @@ object TetrisGame {
   @JSExport
   def main(canvas: html.Canvas): Unit = {
 
-    val ctx = canvas.getContext("2d")
-      .asInstanceOf[dom.CanvasRenderingContext2D]
-
-    val canvasWidth = ctx.canvas.width
-    val canvasHeight = ctx.canvas.height
-    val gridEdgeSize = 20
-    val gridWidth = floor(canvasWidth / gridEdgeSize).toInt
-    val gridHeight = floor(canvasHeight / gridEdgeSize).toInt
-
-
-    case class CanvasPosition(x: Double, y: Double)
+    val gridWidth = 15
+    val gridHeight = 15
+    implicit val drawingContext = new DrawingContext(
+      canvas.getContext("2d").asInstanceOf[dom.CanvasRenderingContext2D],
+      20,
+      gridWidth,
+      gridHeight
+    )
 
     case class BlockPosition(x: Int, y: Int ) {
       def down = BlockPosition(x, y + 1)
@@ -237,27 +257,23 @@ object TetrisGame {
     )
     gameContext = gameContext.withRandomShape
 
-    def clear() = {
-      ctx.fillStyle = "black"
-      ctx.fillRect(0, 0, gridWidth * gridEdgeSize,  gridHeight * gridEdgeSize)
-    }
+    def draw()(implicit gameContext: GameContext, drawingContext: DrawingContext): Unit = {
+      drawingContext.clear()
 
-    def drawBlock(block: StaticBlock): Unit = {
-      val position = CanvasPosition(block.position.x * gridEdgeSize, block.position.y * gridEdgeSize)
-      ctx.fillStyle = block.color.name
-      ctx.fillRect(position.x, position.y, gridEdgeSize, gridEdgeSize)
-      ctx.strokeStyle = "white"
-      ctx.strokeRect(position.x, position.y, gridEdgeSize, gridEdgeSize)
-    }
-
-    def draw()(implicit gameContext: GameContext): Unit = {
-      clear()
+      implicit def staticBlockToCanvasRect(block: StaticBlock): drawingContext.CanvasRect = drawingContext.CanvasRect(
+        block.position.x,
+        block.position.y,
+        1,
+        1,
+        drawingContext.CanvasColor(block.color.name),
+        drawingContext.CanvasColor("white")
+      )
 
       gameContext.mobileShape match {
         case Some(mobileShape) =>
-          (mobileShape.staticBlocks ++ gameContext.staticBlocks).foreach(drawBlock)
+          (mobileShape.staticBlocks ++ gameContext.staticBlocks).foreach(staticBlock => drawingContext.drawBlock(staticBlock))
         case None =>
-          gameContext.staticBlocks.blocks.foreach(drawBlock)
+          gameContext.staticBlocks.blocks.foreach(staticBlock => drawingContext.drawBlock(staticBlock))
       }
     }
 
